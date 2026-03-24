@@ -16,8 +16,11 @@ Single migration creates: **`clients`**, **`goals`**, **`form_templates`**, **`c
 |------|----------------|
 | **Tenant isolation** | `TenantScope` on models with `crp_id`; `TenantScopeThroughServiceLog` on **`note_versions`** and **`signatures`** (tenant via `service_logs.crp_id`). `App\Support\TenantContext` sets the active tenant. |
 | **PHI / sensitive data** | **Clients:** `ssn` (`encrypted`), `dob` (`encrypted:date`). **Client metadata:** `value` encrypted. **Service logs:** `notes_master` as `encrypted:array`. **Note versions / form submissions:** encrypted JSON as specified. **`crp_audit_logs`:** `old_values` / `new_values` as `encrypted:array`; integrity **`hash`** (SHA-256). |
-| **Audit logging** | **`ServiceLogObserver`** writes **`CrpAuditLog`** rows on `ServiceLog` **created** / **updated** (`action_type`, `resource_type` = `service_logs`, `resource_id`, request metadata when available). Observer is a **singleton** in `AppServiceProvider`. |
-| **Optional files** | **`signatures.s3_path`** points at objects on the local **`phi_local`** disk (production: real S3). **Signed route** `phi.service-log-document` resolves the first matching signature file for a service log. |
+| **Audit logging** | **`ServiceLogObserver`** dispatches **`RecordServiceLogAuditJob`** (queue) to persist **`CrpAuditLog`** rows; **`TenantContext` is restored** after the job so the request tenant is not cleared. |
+| **10-day lock** | `ServiceLogLockService::isLocked()` treats logs as read-only when **`locked_at`** is set or after **`SERVICE_LOG_LOCK_DAYS`** (default 10) from the **created** timestamp. **`php artisan service-logs:apply-locks`** stamps **`locked_at`**; scheduled daily in `bootstrap/app.php`. |
+| **Duplicate detection** | Same `client_id` + **`narrative_hash`** (SHA-256 of `notes_master`) within lookback hours. Optional **`SERVICE_LOG_ENFORCE_DUPLICATES=true`** rejects saves. |
+| **Time conflicts** | Optional **`started_at` / `ended_at`** on **`service_logs`**; **`ServiceLogTimeConflictDetector`** finds overlapping intervals for the same **`staff_id`**. **`SERVICE_LOG_ENFORCE_TIME_CONFLICTS=true`** rejects overlapping saves. |
+| **PHI files** | **`PhiDocumentStorageService`** uses **`PHI_DOCUMENTS_DISK`** (`phi_local` or `s3`). Local paths return **file response**; S3 returns a **temporary redirect** to a pre-signed URL. |
 
 ---
 
@@ -29,7 +32,13 @@ app/Models/
   NoteVersion.php, Signature.php, FormTemplate.php, FormSubmission.php
   CrpAuditLog.php, User.php
   Scopes/TenantScope.php, TenantScopeThroughServiceLog.php
+app/Services/Compliance/
+  ServiceLogLockService.php, ServiceLogDuplicateDetector.php, ServiceLogTimeConflictDetector.php
+app/Services/PhiDocumentStorageService.php
+app/Jobs/RecordServiceLogAuditJob.php
+config/compliance.php
 database/migrations/2025_03_24_100000_create_er_compliance_schema.php
+database/migrations/2026_01_15_000001_add_scheduling_to_service_logs_table.php
 ```
 
 ---
@@ -63,7 +72,19 @@ If `TenantContext` is unset, tenant global scopes resolve to **no rows**. Use `M
 
 ## Production file storage
 
-Use **`Storage::disk('s3')`** (or equivalent) with encryption, IAM, and **short-lived signed URLs**; keep **`s3_path` / `pdf_s3_key`** as object keys. Notes are in `config/filesystems.php` above **`phi_local`**.
+Set **`PHI_DOCUMENTS_DISK=s3`** and configure **`AWS_*`** in `.env`. Use **`Storage::disk('s3')`** with SSE-KMS, IAM, and short-lived URLs. **`s3_path` / `pdf_s3_key`** remain opaque keys. Local simulation notes are in `config/filesystems.php` above **`phi_local`**.
+
+---
+
+## Compliance environment (optional)
+
+| Variable | Purpose |
+|----------|---------|
+| `SERVICE_LOG_LOCK_DAYS` | Days before a log is treated as locked (default `10`). |
+| `SERVICE_LOG_DUPLICATE_LOOKBACK_HOURS` | Duplicate search window (default `72`). |
+| `SERVICE_LOG_ENFORCE_DUPLICATES` | `true`/`false` — reject duplicate narrative hashes. |
+| `SERVICE_LOG_ENFORCE_TIME_CONFLICTS` | `true`/`false` — reject overlapping staff intervals. |
+| `PHI_DOCUMENTS_DISK` | Laravel disk name (`phi_local` or `s3`). |
 
 ---
 

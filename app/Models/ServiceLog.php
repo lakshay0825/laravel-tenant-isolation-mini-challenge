@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Scopes\TenantScope;
+use App\Services\Compliance\ServiceLogLockService;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -21,6 +22,8 @@ class ServiceLog extends Model
         'client_id',
         'staff_id',
         'goal_id',
+        'started_at',
+        'ended_at',
         'notes_master',
         'narrative_hash',
         'billing_status',
@@ -32,6 +35,8 @@ class ServiceLog extends Model
     {
         return [
             'notes_master' => 'encrypted:array',
+            'started_at' => 'datetime',
+            'ended_at' => 'datetime',
             'locked_at' => 'datetime',
         ];
     }
@@ -39,6 +44,11 @@ class ServiceLog extends Model
     protected static function booted(): void
     {
         static::addGlobalScope(new TenantScope);
+    }
+
+    public function isLocked(): bool
+    {
+        return app(ServiceLogLockService::class)->isLocked($this);
     }
 
     public function client(): BelongsTo

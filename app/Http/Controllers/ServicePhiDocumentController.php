@@ -4,13 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Models\ServiceLog;
 use App\Models\Signature;
+use App\Services\PhiDocumentStorageService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class ServicePhiDocumentController extends Controller
 {
-    public function show(Request $request, string $serviceLog): BinaryFileResponse
+    public function __construct(
+        private PhiDocumentStorageService $phiStorage,
+    ) {}
+
+    public function show(Request $request, string $serviceLog)
     {
         abort_unless($request->hasValidSignature(), 403);
 
@@ -22,10 +25,10 @@ class ServicePhiDocumentController extends Controller
             ->orderBy('id')
             ->first();
 
-        if ($signature === null || $signature->s3_path === null || ! Storage::disk('phi_local')->exists($signature->s3_path)) {
+        if ($signature === null || $signature->s3_path === null || ! $this->phiStorage->exists($signature->s3_path)) {
             abort(404);
         }
 
-        return response()->file(Storage::disk('phi_local')->path($signature->s3_path));
+        return $this->phiStorage->responseForRelativePath($signature->s3_path);
     }
 }
