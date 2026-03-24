@@ -4,6 +4,8 @@ Sample Laravel application demonstrating **tenant isolation**, **PHI field encry
 
 **Stack:** Laravel 13, PHP 8.2+
 
+For a **full product ER reference** (clients, `service_logs`, goals, forms, `crp_audit_logs`, cascade rules, compliance mapping), see [docs/ER_DIAGRAM_REFERENCE.md](docs/ER_DIAGRAM_REFERENCE.md).
+
 ---
 
 ## Challenge scope (deliverables)
