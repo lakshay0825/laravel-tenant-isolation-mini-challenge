@@ -2,8 +2,9 @@
 
 namespace App\Observers;
 
-use App\Models\AuditLog;
+use App\Models\CrpAuditLog;
 use App\Models\ServiceLog;
+use Illuminate\Support\Str;
 
 class ServiceLogObserver
 {
@@ -23,21 +24,30 @@ class ServiceLogObserver
             return;
         }
 
-        $this->originalBeforeUpdate[$serviceLog->getKey()] = array_intersect_key(
-            $serviceLog->getRawOriginal(),
-            $dirty
-        );
+        $id = $serviceLog->getKey();
+        foreach (array_keys($dirty) as $key) {
+            $this->originalBeforeUpdate[$id][$key] = $serviceLog->getOriginal($key);
+        }
     }
 
     public function created(ServiceLog $serviceLog): void
     {
-        AuditLog::create([
+        $newValues = $this->snapshot($serviceLog);
+
+        CrpAuditLog::create([
+            'request_id' => request()?->header('X-Request-Id') ?? (string) Str::uuid(),
             'crp_id' => $serviceLog->crp_id,
-            'auditable_type' => ServiceLog::class,
-            'auditable_id' => $serviceLog->getKey(),
-            'event' => 'created',
+            'actor_id' => auth()->id(),
+            'action_type' => 'created',
+            'resource_type' => 'service_logs',
+            'resource_id' => $serviceLog->getKey(),
             'old_values' => null,
-            'new_values' => $this->snapshot($serviceLog),
+            'new_values' => $newValues,
+            'ip_address' => request()?->ip(),
+            'user_agent' => request()?->userAgent(),
+            'outcome' => 'success',
+            'action_context' => null,
+            'hash' => $this->integrityHash('created', $serviceLog->getKey(), null, $newValues),
         ]);
     }
 
@@ -50,19 +60,34 @@ class ServiceLogObserver
             return;
         }
 
-        $key = $serviceLog->getKey();
-        $original = $this->originalBeforeUpdate[$key] ?? [];
-        unset($this->originalBeforeUpdate[$key]);
+        $id = $serviceLog->getKey();
+        $prior = $this->originalBeforeUpdate[$id] ?? [];
+        unset($this->originalBeforeUpdate[$id]);
 
-        $old = array_intersect_key($original, $changes);
+        $newValues = [];
+        foreach (array_keys($changes) as $key) {
+            $newValues[$key] = $this->normalizeAuditValue($serviceLog->getAttribute($key));
+        }
 
-        AuditLog::create([
+        $oldValues = [];
+        foreach (array_keys($changes) as $key) {
+            $oldValues[$key] = $this->normalizeAuditValue($prior[$key] ?? null);
+        }
+
+        CrpAuditLog::create([
+            'request_id' => request()?->header('X-Request-Id') ?? (string) Str::uuid(),
             'crp_id' => $serviceLog->crp_id,
-            'auditable_type' => ServiceLog::class,
-            'auditable_id' => $serviceLog->getKey(),
-            'event' => 'updated',
-            'old_values' => $old === [] ? null : $old,
-            'new_values' => $changes,
+            'actor_id' => auth()->id(),
+            'action_type' => 'updated',
+            'resource_type' => 'service_logs',
+            'resource_id' => $serviceLog->getKey(),
+            'old_values' => $oldValues === [] ? null : $oldValues,
+            'new_values' => $newValues,
+            'ip_address' => request()?->ip(),
+            'user_agent' => request()?->userAgent(),
+            'outcome' => 'success',
+            'action_context' => null,
+            'hash' => $this->integrityHash('updated', $serviceLog->getKey(), $oldValues, $newValues),
         ]);
     }
 
@@ -71,9 +96,41 @@ class ServiceLogObserver
      */
     private function snapshot(ServiceLog $serviceLog): array
     {
-        $attributes = $serviceLog->getAttributes();
-        unset($attributes['updated_at'], $attributes['created_at']);
+        return [
+            'id' => $serviceLog->id,
+            'crp_id' => $serviceLog->crp_id,
+            'client_id' => $serviceLog->client_id,
+            'staff_id' => $serviceLog->staff_id,
+            'goal_id' => $serviceLog->goal_id,
+            'notes_master' => $serviceLog->notes_master,
+            'narrative_hash' => $serviceLog->narrative_hash,
+            'billing_status' => $serviceLog->billing_status,
+            'invoice_number' => $serviceLog->invoice_number,
+            'locked_at' => $this->normalizeAuditValue($serviceLog->locked_at),
+        ];
+    }
 
-        return $attributes;
+    private function normalizeAuditValue(mixed $value): mixed
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format(\DateTimeInterface::ATOM);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $old
+     * @param  array<string, mixed>|null  $new
+     */
+    private function integrityHash(string $action, string $resourceId, ?array $old, ?array $new): string
+    {
+        return hash('sha256', json_encode([
+            'action_type' => $action,
+            'resource_type' => 'service_logs',
+            'resource_id' => $resourceId,
+            'old_values' => $old,
+            'new_values' => $new,
+        ], JSON_THROW_ON_ERROR));
     }
 }

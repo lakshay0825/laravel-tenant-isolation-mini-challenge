@@ -28,9 +28,11 @@ class TenantIsolationAndPhiEncryptionTest extends TestCase
         TenantContext::set($tenantA);
         $client = Client::create([
             'crp_id' => $tenantA,
-            'name' => 'Tenant A Client',
+            'first_name' => 'Tenant',
+            'last_name' => 'A',
             'ssn' => '000-00-0001',
             'dob' => '1990-01-15',
+            'status' => 'active',
         ]);
 
         TenantContext::set($tenantB);
@@ -48,9 +50,11 @@ class TenantIsolationAndPhiEncryptionTest extends TestCase
         TenantContext::set($tenantId);
         $client = Client::create([
             'crp_id' => $tenantId,
-            'name' => 'Vault Test',
+            'first_name' => 'Vault',
+            'last_name' => 'Test',
             'ssn' => $plainSsn,
             'dob' => '1975-06-30',
+            'status' => 'active',
         ]);
 
         $row = DB::table('clients')->where('id', $client->id)->first();

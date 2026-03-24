@@ -154,4 +154,4 @@ erDiagram
 
 ---
 
-*This document is a reference schema. The current mini-challenge codebase implements a reduced subset (e.g. `clients`, `service_logs`, tenant `crp_id`, encrypted PHI fields, and application-level audit storage).*
+*Migrations in this repository implement this schema (see `database/migrations/2025_03_24_100000_create_er_compliance_schema.php`). Domain logic beyond models, observers, and feature tests (e.g. duplicate detection, 10-day lock workflows, async audit workers) can be layered on this foundation.*

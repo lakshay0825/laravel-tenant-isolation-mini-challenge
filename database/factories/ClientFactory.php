@@ -17,10 +17,12 @@ class ClientFactory extends Factory
     {
         return [
             'crp_id' => (string) Str::uuid(),
-            'name' => fake()->name(),
+            'first_name' => fake()->firstName(),
+            'last_name' => fake()->lastName(),
             'ssn' => fake()->numerify('###-##-####'),
             'dob' => fake()->date(),
-            'signature_path' => null,
+            'state_code' => fake()->optional()->randomElement(['CA', 'NY', 'TX']),
+            'status' => 'active',
         ];
     }
 }

@@ -1,44 +1,35 @@
-# Laravel Multi-Tenant / HIPAA Compliance Mini-Challenge
+# Laravel Multi-Tenant / HIPAA-Oriented Compliance Schema
 
-Sample Laravel application demonstrating **tenant isolation**, **PHI field encryption**, **audit logging** for `ServiceLog` changes, and optional **local document storage** with time-limited signed URLs. Built for a scoped technical assessment (multi-tenancy and compliance-oriented patterns).
+Laravel application demonstrating **tenant isolation**, **encrypted PHI / JSON fields**, **`crp_audit_logs`** for immutable-style service change tracking, and optional **local “S3 path” document** delivery via signed URLs. The database layout follows the **ER compliance reference** (clients as PHI anchor, `service_logs` as core engine, goals, forms, signatures, note versions).
 
 **Stack:** Laravel 13, PHP 8.2+
 
-For a **full product ER reference** (clients, `service_logs`, goals, forms, `crp_audit_logs`, cascade rules, compliance mapping), see [docs/ER_DIAGRAM_REFERENCE.md](docs/ER_DIAGRAM_REFERENCE.md).
+Full relationship and cascade reference: [docs/ER_DIAGRAM_REFERENCE.md](docs/ER_DIAGRAM_REFERENCE.md).
 
 ---
 
-## Challenge scope (deliverables)
+## Implemented database (migrations)
+
+Single migration creates: **`clients`**, **`goals`**, **`form_templates`**, **`client_metadata`**, **`service_logs`**, **`note_versions`**, **`signatures`**, **`form_submissions`**, **`crp_audit_logs`**, with FK rules per the ER spec (CASCADE / RESTRICT / SET NULL where defined).
 
 | Area | Implementation |
 |------|----------------|
-| **Tenant isolation** | `crp_id` on `Client` and `ServiceLog`; `TenantScope` global scope; `App\Support\TenantContext` sets the active tenant for the request or test. |
-| **PHI protection** | `Client`: `ssn` → `encrypted` cast, `dob` → `encrypted:date` cast; UUID primary keys; indexed `crp_id` on tenant-scoped tables. |
-| **Audit logging** | `ServiceLogObserver` on create/update; persisted in `audit_logs` (`old_values` / `new_values` JSON). |
-| **Optional files** | `phi_local` disk under `storage/app/phi`; `GET` route `phi.service-log-document` uses a **signed temporary URL** to download an attached document. |
-
-Supporting model: **`AuditLog`** (required to store audits; not a third “business” entity beyond the brief’s storage requirement).
+| **Tenant isolation** | `TenantScope` on models with `crp_id`; `TenantScopeThroughServiceLog` on **`note_versions`** and **`signatures`** (tenant via `service_logs.crp_id`). `App\Support\TenantContext` sets the active tenant. |
+| **PHI / sensitive data** | **Clients:** `ssn` (`encrypted`), `dob` (`encrypted:date`). **Client metadata:** `value` encrypted. **Service logs:** `notes_master` as `encrypted:array`. **Note versions / form submissions:** encrypted JSON as specified. **`crp_audit_logs`:** `old_values` / `new_values` as `encrypted:array`; integrity **`hash`** (SHA-256). |
+| **Audit logging** | **`ServiceLogObserver`** writes **`CrpAuditLog`** rows on `ServiceLog` **created** / **updated** (`action_type`, `resource_type` = `service_logs`, `resource_id`, request metadata when available). Observer is a **singleton** in `AppServiceProvider`. |
+| **Optional files** | **`signatures.s3_path`** points at objects on the local **`phi_local`** disk (production: real S3). **Signed route** `phi.service-log-document` resolves the first matching signature file for a service log. |
 
 ---
 
-## Repository layout (relevant parts)
+## Repository layout (main pieces)
 
 ```
-app/
-  Http/Controllers/ServicePhiDocumentController.php  # Signed URL document download
-  Models/
-    AuditLog.php, Client.php, ServiceLog.php
-    Scopes/TenantScope.php
-  Observers/ServiceLogObserver.php
-  Support/TenantContext.php
-database/migrations/
-  *_create_clients_table.php
-  *_create_service_logs_table.php
-  *_create_audit_logs_table.php
-tests/Feature/
-  TenantIsolationAndPhiEncryptionTest.php
-  ServiceLogAuditLoggingTest.php
-  PhiDocumentTemporaryUrlTest.php          # Optional
+app/Models/
+  Client.php, ClientMetadata.php, Goal.php, ServiceLog.php
+  NoteVersion.php, Signature.php, FormTemplate.php, FormSubmission.php
+  CrpAuditLog.php, User.php
+  Scopes/TenantScope.php, TenantScopeThroughServiceLog.php
+database/migrations/2025_03_24_100000_create_er_compliance_schema.php
 ```
 
 ---
@@ -49,55 +40,30 @@ tests/Feature/
 composer install
 cp .env.example .env
 php artisan key:generate
-# Configure DB in .env (SQLite default in Laravel skeleton: database/database.sqlite)
-touch database/database.sqlite   # if using SQLite and file does not exist
+touch database/database.sqlite   # if using SQLite
 php artisan migrate
-```
-
-Run the automated tests:
-
-```bash
 php artisan test
 ```
 
-PHPUnit uses an in-memory SQLite database (`phpunit.xml`); no separate test DB configuration is required for the feature tests.
+---
+
+## Tenancy
+
+Set the tenant before tenant-scoped queries:
+
+```php
+use App\Support\TenantContext;
+
+TenantContext::set($crpId);
+```
+
+If `TenantContext` is unset, tenant global scopes resolve to **no rows**. Use `Model::withoutGlobalScopes()` only where intentional (e.g. signed document download after resolving the `ServiceLog`).
 
 ---
 
-## How tenancy works
+## Production file storage
 
-1. Set the current tenant before running queries or creating tenant-owned rows:
-
-   ```php
-   use App\Support\TenantContext;
-
-   TenantContext::set($crpId); // e.g. from auth / subdomain / header
-   ```
-
-2. **Eloquent** queries on `Client`, `ServiceLog`, and `AuditLog` automatically apply `TenantScope` and filter by `crp_id`.
-
-3. If `TenantContext` is not set, the scope resolves to **no rows** (`whereRaw('1 = 0')`) to avoid accidental cross-tenant reads.
-
-4. Admin or system jobs that must bypass the scope should use `Model::withoutGlobalScopes()` deliberately (see the document controller for `ServiceLog`).
-
----
-
-## Production file storage (brief)
-
-This project uses a **local** disk (`phi_local`) for simulation. In production you would typically:
-
-- Store blobs on **Amazon S3** (or compatible object storage) with **encryption at rest** (e.g. SSE-KMS).
-- Upload via `Storage::disk('s3')->put()` (streaming for large PDFs).
-- Issue **short-lived pre-signed URLs** (or CloudFront signed URLs) instead of exposing bucket keys; enforce auth and tenant checks **before** generating the URL.
-- Apply bucket policies, VPC endpoints, logging, and lifecycle rules per your security and retention policy.
-
-Details are also noted inline in `config/filesystems.php` above the `phi_local` disk definition.
-
----
-
-## Observer note
-
-`ServiceLogObserver` is registered as a **singleton** in `AppServiceProvider` so state captured during `saving` is available when `updated` runs (Laravel’s container would otherwise resolve a new observer instance per event).
+Use **`Storage::disk('s3')`** (or equivalent) with encryption, IAM, and **short-lived signed URLs**; keep **`s3_path` / `pdf_s3_key`** as object keys. Notes are in `config/filesystems.php` above **`phi_local`**.
 
 ---
 
